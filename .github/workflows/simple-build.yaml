@@ -1,0 +1,79 @@
+name: Build Typst
+
+on:
+  push:
+    branches:
+      - main
+
+  # Allow manual rebuilds from the Actions tab.
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Install Typst
+        uses: typst-community/setup-typst@v5
+        with:
+          typst-version: 0.15.1
+
+      - name: Install Font Awesome Free
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p /tmp/fontawesome
+
+          gh release download 7.3.1 \
+            --repo FortAwesome/Font-Awesome \
+            --pattern '*desktop*.zip' \
+            --dir /tmp/fontawesome
+
+          unzip -q /tmp/fontawesome/*.zip \
+            -d /tmp/fontawesome/extracted
+
+          mkdir -p ~/.local/share/fonts/fontawesome
+
+          find /tmp/fontawesome/extracted \
+            -type f -name '*.otf' \
+            -exec cp {} ~/.local/share/fonts/fontawesome/ \;
+
+          fc-cache -f
+
+      - name: Verify fonts
+        run: typst fonts | grep "Font Awesome"
+
+      - name: Compile PDF
+        run: typst compile main.typ CV.pdf
+
+      - name: Publish nightly release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view nightly >/dev/null 2>&1; then
+            # Move the rolling nightly tag to this commit.
+            git tag --force nightly "$GITHUB_SHA"
+            git push origin refs/tags/nightly --force
+
+            # Replace the existing PDF.
+            gh release upload nightly CV.pdf --clobber
+
+            # Keep release metadata current.
+            gh release edit nightly \
+              --title "Nightly" \
+              --notes "Latest build from commit $GITHUB_SHA." \
+              --latest
+          else
+            # First run: create both the nightly tag and release.
+            gh release create nightly CV.pdf \
+              --target "$GITHUB_SHA" \
+              --title "Nightly" \
+              --notes "Latest build from commit $GITHUB_SHA." \
+              --latest
+          fi
